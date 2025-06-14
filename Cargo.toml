@@ -1,0 +1,18 @@
+[package]
+name = "supershorty"
+version = "0.1.0"
+authors = ["チセ <123655015+chise0713@users.noreply.github.com>"]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "A BSD-styled CLI parser"
+repository = "https://github.com/chise0713/supershorty"
+keywords = ["argument", "cli", "arg", "parser", "parse"]
+categories = ["command-line-interface"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0.95"
+quote = "1.0.40"
+syn = { version = "2.0.102", features = ["full"] }
