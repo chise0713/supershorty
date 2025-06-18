@@ -8,10 +8,12 @@
 //!         -h              prints this help message
 //! ```
 
+use std::process::ExitCode;
+
 use supershorty::Args;
 
 #[derive(Args, Debug)]
-#[name("myapp")]
+#[args(name = "myapp", allow_no_args = true)]
 struct MyArgs {
     #[arg(flag = 'a', help = "accept string")]
     string: Option<Box<str>>,
@@ -21,7 +23,13 @@ struct MyArgs {
     f32: Option<f32>,
 }
 
-fn main() {
-    let args = MyArgs::parse();
+fn main() -> ExitCode {
+    let args = match MyArgs::parse() {
+        Ok(args) => args,
+        Err(e) => {
+            return e;
+        }
+    };
     println!("Parsed arguments: {:?}", args);
+    ExitCode::SUCCESS
 }
