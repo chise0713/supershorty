@@ -1,6 +1,6 @@
 [package]
 name = "supershorty"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["チセ <123655015+chise0713@users.noreply.github.com>"]
 edition = "2024"
 license = "MIT OR Apache-2.0"

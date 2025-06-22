@@ -27,6 +27,8 @@
 //! ```
 
 extern crate proc_macro;
+use std::cmp::Ordering;
+
 use darling::FromDeriveInput;
 use proc_macro::TokenStream;
 use quote::quote;
@@ -106,12 +108,22 @@ impl Parse for ArgAttr {
     }
 }
 
+fn custom_char_sort(a: &char, b: &char) -> Ordering {
+    let lower_a = a.to_ascii_lowercase();
+    let lower_b = b.to_ascii_lowercase();
+
+    match lower_a.cmp(&lower_b) {
+        Ordering::Less => Ordering::Less,
+        Ordering::Greater => Ordering::Greater,
+        Ordering::Equal => a.cmp(&b),
+    }
+}
+
 #[proc_macro_derive(Args, attributes(arg, args))]
 pub fn derive(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let struct_name = &input.ident;
-    let args = ArgsAttr::from_derive_input(&input)
-        .expect("wrong input");
+    let args = ArgsAttr::from_derive_input(&input).expect("wrong input");
     let name = args.name.into_boxed_str();
     let allow_no_args = args.allow_no_args.unwrap_or(false);
     if name.is_empty() {
@@ -285,7 +297,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
             },
         )])
         .collect();
-    help_entries.sort_by_key(|(flag, _)| *flag);
+    help_entries.sort_by(|(flag_a, _), (flag_b, _)| custom_char_sort(flag_a, flag_b));
     let field_helps: Box<[proc_macro2::TokenStream]> =
         help_entries.into_iter().map(|(_, ts)| ts).collect();
 
@@ -311,7 +323,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
         })
         .chain(['h'])
         .collect();
-    bool_flags.sort();
+    bool_flags.sort_by(custom_char_sort);
     let available_bool = if bool_flags.is_empty() {
         "".to_string()
     } else {
@@ -340,7 +352,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
             (flag, field_name)
         })
         .collect();
-    value_options.sort_by_key(|(flag, _)| *flag);
+    value_options.sort_by(|(flag_a, _), (flag_b, _)| custom_char_sort(flag_a, flag_b));
     let available_values = value_options
         .into_iter()
         .map(|(flag, field_name)| format!("[-{} {}]", flag, field_name))
