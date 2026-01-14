@@ -115,7 +115,7 @@ fn custom_char_sort(a: &char, b: &char) -> Ordering {
     match lower_a.cmp(&lower_b) {
         Ordering::Less => Ordering::Less,
         Ordering::Greater => Ordering::Greater,
-        Ordering::Equal => a.cmp(&b),
+        Ordering::Equal => a.cmp(b),
     }
 }
 
@@ -149,23 +149,21 @@ pub fn derive(input: TokenStream) -> TokenStream {
                 .as_ref()
                 .expect("Named fields should always have an identifier");
             let field_type = &field.ty;
-            if let Type::Path(TypePath { path, .. }) = field_type {
-                if let Some(segment) = path.segments.last() {
-                    if segment.ident == "Option" {
-                        if let PathArguments::AngleBracketed(args) = &segment.arguments {
-                            if let Some(syn::GenericArgument::Type(inner_type)) = args.args.first()
-                            {
-                                return quote! { #field_ident: None::<#inner_type> };
-                            }
-                        }
-                        let error = syn::Error::new_spanned(
-                            field_type,
-                            "Option type must have exactly one type argument (e.g., Option<T>)",
-                        )
-                        .to_compile_error();
-                        return quote! { #field_ident: #error };
-                    }
+            if let Type::Path(TypePath { path, .. }) = field_type
+                && let Some(segment) = path.segments.last()
+                && segment.ident == "Option"
+            {
+                if let PathArguments::AngleBracketed(args) = &segment.arguments
+                    && let Some(syn::GenericArgument::Type(inner_type)) = args.args.first()
+                {
+                    return quote! { #field_ident: None::<#inner_type> };
                 }
+                let error = syn::Error::new_spanned(
+                    field_type,
+                    "Option type must have exactly one type argument (e.g., Option<T>)",
+                )
+                .to_compile_error();
+                return quote! { #field_ident: #error };
             }
             quote! { #field_ident: false }
         })
@@ -178,12 +176,12 @@ pub fn derive(input: TokenStream) -> TokenStream {
             let field_name = field_ident.to_string();
             let mut flag = None;
             for attr in &field.attrs {
-                if attr.path().is_ident("arg") {
-                    if let syn::Meta::List(meta_list) = &attr.meta {
-                        let arg: ArgAttr = syn::parse2(meta_list.tokens.clone())
-                            .expect("failed to parse field attributes");
-                        flag = arg.flag;
-                    }
+                if attr.path().is_ident("arg")
+                    && let syn::Meta::List(meta_list) = &attr.meta
+                {
+                    let arg: ArgAttr = syn::parse2(meta_list.tokens.clone())
+                        .expect("failed to parse field attributes");
+                    flag = arg.flag;
                 }
             }
             let flag = flag.unwrap_or(field_name.chars().next().unwrap());
@@ -255,13 +253,13 @@ pub fn derive(input: TokenStream) -> TokenStream {
             let mut flag = None;
             let mut help_override = None;
             for attr in &field.attrs {
-                if attr.path().is_ident("arg") {
-                    if let syn::Meta::List(meta_list) = &attr.meta {
-                        let arg: ArgAttr = syn::parse2(meta_list.tokens.clone())
-                            .expect("failed to parse field attributes");
-                        flag = arg.flag;
-                        help_override = arg.help.map(|s| s.into_boxed_str());
-                    }
+                if attr.path().is_ident("arg")
+                    && let syn::Meta::List(meta_list) = &attr.meta
+                {
+                    let arg: ArgAttr = syn::parse2(meta_list.tokens.clone())
+                        .expect("failed to parse field attributes");
+                    flag = arg.flag;
+                    help_override = arg.help.map(|s| s.into_boxed_str());
                 }
             }
             let is_option = matches!(&field.ty, Type::Path(type_path) if 
@@ -311,12 +309,12 @@ pub fn derive(input: TokenStream) -> TokenStream {
             let field_name = field.ident.as_ref().unwrap().to_string();
             let mut flag = None;
             for attr in &field.attrs {
-                if attr.path().is_ident("arg") {
-                    if let syn::Meta::List(meta_list) = &attr.meta {
-                        let arg: ArgAttr = syn::parse2(meta_list.tokens.clone())
-                            .expect("failed to parse field attributes");
-                        flag = arg.flag;
-                    }
+                if attr.path().is_ident("arg")
+                    && let syn::Meta::List(meta_list) = &attr.meta
+                {
+                    let arg: ArgAttr = syn::parse2(meta_list.tokens.clone())
+                        .expect("failed to parse field attributes");
+                    flag = arg.flag;
                 }
             }
             flag.unwrap_or(field_name.chars().next().unwrap())
@@ -340,12 +338,12 @@ pub fn derive(input: TokenStream) -> TokenStream {
             let field_name = field.ident.as_ref().unwrap().to_string().into_boxed_str();
             let mut flag = None;
             for attr in &field.attrs {
-                if attr.path().is_ident("arg") {
-                    if let syn::Meta::List(meta_list) = &attr.meta {
-                        let arg: ArgAttr = syn::parse2(meta_list.tokens.clone())
-                            .expect("failed to parse field attributes");
-                        flag = arg.flag;
-                    }
+                if attr.path().is_ident("arg")
+                    && let syn::Meta::List(meta_list) = &attr.meta
+                {
+                    let arg: ArgAttr = syn::parse2(meta_list.tokens.clone())
+                        .expect("failed to parse field attributes");
+                    flag = arg.flag;
                 }
             }
             let flag = flag.unwrap_or(field_name.chars().next().unwrap());
@@ -353,12 +351,12 @@ pub fn derive(input: TokenStream) -> TokenStream {
         })
         .collect();
     value_options.sort_by(|(flag_a, _), (flag_b, _)| custom_char_sort(flag_a, flag_b));
-    let available_values = value_options
+    let tokens = value_options
         .into_iter()
-        .map(|(flag, field_name)| format!("[-{} {}]", flag, field_name))
-        .collect::<Box<[_]>>()
-        .join(" ")
-        .into_boxed_str();
+        .map(|(flag, field_name)| format!("[-{} {}]", flag, field_name));
+
+    let available_values =
+        format_usage_tokens(&format!("usage: {} ", name), tokens, 65).into_boxed_str();
 
     let help_definition = quote! {
         fn help() {
@@ -440,4 +438,41 @@ pub fn derive(input: TokenStream) -> TokenStream {
     };
 
     TokenStream::from(expanded)
+}
+
+fn format_usage_tokens(
+    prefix: &str,
+    tokens: impl IntoIterator<Item = String>,
+    max_width: usize,
+) -> String {
+    let prefix_len = prefix.chars().count();
+
+    let mut out = String::new();
+    out.push_str(prefix);
+
+    let mut line_len = prefix_len;
+    let mut first_token = true;
+
+    for token in tokens {
+        let token_len = token.chars().count();
+        let sep_len = if first_token { 0 } else { 1 };
+
+        if line_len + sep_len + token_len > max_width {
+            out.push('\n');
+            out.push_str(&" ".repeat(prefix_len));
+            out.push_str(&token);
+            line_len = prefix_len + token_len;
+        } else {
+            if !first_token {
+                out.push(' ');
+                line_len += 1;
+            }
+            out.push_str(&token);
+            line_len += token_len;
+        }
+
+        first_token = false;
+    }
+
+    out
 }
