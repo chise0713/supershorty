@@ -355,8 +355,8 @@ pub fn derive(input: TokenStream) -> TokenStream {
         .into_iter()
         .map(|(flag, field_name)| format!("[-{} {}]", flag, field_name));
 
-    let available_values =
-        format_usage_tokens(&format!("usage: {} ", name), tokens, 65).into_boxed_str();
+    let usage = format_usage_tokens(&format!("usage: {} {} ", name, available_bool), tokens, 65)
+        .into_boxed_str();
 
     let help_definition = quote! {
         fn help() {
@@ -368,7 +368,7 @@ pub fn derive(input: TokenStream) -> TokenStream {
 
     let usage_definition = quote! {
         fn usage() {
-            eprintln!("usage: {} {} {}", #name, #available_bool, #available_values);
+            eprintln!("{}", #usage);
         }
     };
 
