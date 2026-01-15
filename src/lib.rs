@@ -27,7 +27,7 @@
 //! ```
 
 extern crate proc_macro;
-use std::cmp::Ordering;
+use std::{cmp::Ordering, iter};
 
 use darling::FromDeriveInput;
 use proc_macro::TokenStream;
@@ -351,12 +351,16 @@ pub fn derive(input: TokenStream) -> TokenStream {
         })
         .collect();
     value_options.sort_by(|(flag_a, _), (flag_b, _)| custom_char_sort(flag_a, flag_b));
-    let tokens = value_options
-        .into_iter()
-        .map(|(flag, field_name)| format!("[-{} {}]", flag, field_name));
-
-    let usage = format_usage_tokens(&format!("usage: {} {} ", name, available_bool), tokens, 65)
-        .into_boxed_str();
+    let usage = format_usage_tokens(
+        &format!("usage: {} ", name),
+        iter::once(available_bool).chain(
+            value_options
+                .into_iter()
+                .map(|(flag, field_name)| format!("[-{} {}]", flag, field_name)),
+        ),
+        65,
+    )
+    .into_boxed_str();
 
     let help_definition = quote! {
         fn help() {
