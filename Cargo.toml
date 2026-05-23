@@ -1,8 +1,9 @@
 [package]
 name = "supershorty"
-version = "0.2.4"
+version = "0.3.0"
 authors = ["チセ <123655015+chise0713@users.noreply.github.com>"]
-edition = "2024"
+edition = "2021"
+rust-version = "1.65"
 license = "MIT OR Apache-2.0"
 description = "A BSD-styled CLI parser"
 repository = "https://github.com/chise0713/supershorty"
@@ -13,7 +14,7 @@ categories = ["command-line-interface"]
 proc-macro = true
 
 [dependencies]
-darling = "0.20.11"
-proc-macro2 = "1.0.95"
-quote = "1.0.40"
-syn = { version = "2.0.103", features = ["full"] }
+darling = "^0.20"
+proc-macro2 = "^1"
+quote = "^1"
+syn = { version = "^2", features = ["full"] }

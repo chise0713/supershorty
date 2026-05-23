@@ -2,7 +2,9 @@
 //!
 //! example usage:
 //! ```
-//! #[derive(Args)]
+//! # use std::process::ExitCode;
+//! # fn main() -> ExitCode {
+//! #[derive(supershorty::Args)]
 //! #[args(name = "myapp", allow_no_args = true)]
 //! struct MyArgs {
 //!     #[arg(flag = 'f', help = "some flag")]
@@ -10,32 +12,34 @@
 //!     #[arg(flag = 'o', help = "some option")]
 //!     option: Option<String>,
 //! }
-//! ```
 //!
-//! ```
 //! let args = match MyArgs::parse() {
 //!     Ok(args) => args,
 //!     Err(e) => return e,
 //! };
+//!
+//! # let (is_err, is_help) = (false, false);
+//!
 //! if is_err {
 //!     MyArgs::usage();
-//!     return std::process::ExitCode::FAILURE;
+//!     return ExitCode::FAILURE;
 //! } else if is_help {
 //!     MyArgs::help();
-//!     return std::process::ExitCode::SUCCESS;
+//!     return ExitCode::SUCCESS;
 //! }
-//! ```
-
+//! # ExitCode::SUCCESS
+//! # }
+//! ``
 extern crate proc_macro;
-use std::{cmp::Ordering, iter};
 
 use darling::FromDeriveInput;
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    Data, DeriveInput, Error, Expr, Fields, Lit, PathArguments, Token, Type, TypePath,
+    Data, DeriveInput, Error, Expr, Fields, Lit, Meta, PathArguments, Token, Type, TypePath,
     parse::{Parse, ParseStream},
     parse_macro_input,
+    punctuated::Punctuated,
 };
 
 #[derive(FromDeriveInput, Default)]
@@ -45,6 +49,7 @@ struct ArgsAttr {
     allow_no_args: Option<bool>,
 }
 
+#[derive(Default)]
 struct ArgAttr {
     flag: Option<char>,
     help: Option<String>,
@@ -52,431 +57,421 @@ struct ArgAttr {
 
 impl Parse for ArgAttr {
     fn parse(input: ParseStream) -> syn::Result<Self> {
-        let mut flag = None;
-        let mut help = None;
+        let mut out = Self::default();
 
-        let metas = syn::punctuated::Punctuated::<syn::Meta, Token![,]>::parse_terminated(input)?;
+        let metas = Punctuated::<Meta, Token![,]>::parse_terminated(input)?;
 
         for meta in metas {
             match meta {
-                syn::Meta::NameValue(nv) => {
-                    if nv.path.is_ident("flag") {
-                        let nv_value = nv.value;
-                        if let Expr::Lit(syn::ExprLit {
-                            lit: Lit::Char(lit_char),
-                            ..
-                        }) = nv_value
-                        {
-                            flag = Some(lit_char.value());
-                        } else {
-                            return Err(Error::new_spanned(
-                                nv_value,
-                                "Expected char literal for 'flag' (e.g., flag = 'c')",
-                            ));
+                Meta::NameValue(nv) if nv.path.is_ident("flag") => match nv.value {
+                    Expr::Lit(expr) => match expr.lit {
+                        Lit::Char(ch) => out.flag = Some(ch.value()),
+                        _ => {
+                            return Err(Error::new_spanned(expr, "expected char literal"));
                         }
-                    } else if nv.path.is_ident("help") {
-                        let nv_value = nv.value;
-                        if let Expr::Lit(syn::ExprLit {
-                            lit: Lit::Str(lit_str),
-                            ..
-                        }) = nv_value
-                        {
-                            help = Some(lit_str.value());
-                        } else {
-                            return Err(Error::new_spanned(
-                                nv_value,
-                                "Expected string literal for 'help' (e.g., help = \"description\")",
-                            ));
-                        }
-                    } else {
-                        return Err(Error::new_spanned(
-                            nv,
-                            "Unsupported attribute key. Expected `flag` or `help`",
-                        ));
+                    },
+                    _ => {
+                        return Err(Error::new_spanned(nv, "expected char literal"));
                     }
-                }
+                },
+
+                Meta::NameValue(nv) if nv.path.is_ident("help") => match nv.value {
+                    Expr::Lit(expr) => match expr.lit {
+                        Lit::Str(s) => out.help = Some(s.value()),
+                        _ => {
+                            return Err(Error::new_spanned(expr, "expected string literal"));
+                        }
+                    },
+                    _ => {
+                        return Err(Error::new_spanned(nv, "expected string literal"));
+                    }
+                },
+
                 _ => {
-                    return Err(Error::new_spanned(
-                        meta,
-                        "Unsupported attribute format. Expected `key = value` (e.g., flag = 'c')",
-                    ));
+                    return Err(Error::new_spanned(meta, "unsupported attribute"));
                 }
             }
         }
 
-        Ok(ArgAttr { flag, help })
+        Ok(out)
     }
 }
 
-fn custom_char_sort(a: &char, b: &char) -> Ordering {
-    let lower_a = a.to_ascii_lowercase();
-    let lower_b = b.to_ascii_lowercase();
-
-    match lower_a.cmp(&lower_b) {
-        Ordering::Less => Ordering::Less,
-        Ordering::Greater => Ordering::Greater,
-        Ordering::Equal => a.cmp(b),
-    }
+struct FieldInfo<'a> {
+    ident: &'a syn::Ident,
+    flag: char,
+    help: String,
+    is_option: bool,
+    value_name: String,
+    inner_ty: Option<&'a Type>,
 }
 
-#[proc_macro_derive(Args, attributes(arg, args))]
-pub fn derive(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    let struct_name = &input.ident;
-    let args = ArgsAttr::from_derive_input(&input).expect("wrong input");
-    let name = args.name.into_boxed_str();
-    let allow_no_args = args.allow_no_args.unwrap_or(false);
-    if name.is_empty() {
-        panic!("the `name` in `args` attribute is required for `Args` derive macro");
-    }
-    let fields = match &input.data {
-        Data::Struct(data) => match &data.fields {
-            Fields::Named(fields_named) => &fields_named.named,
-            _ => {
-                panic!("incorrect struct format");
-            }
-        },
-        _ => {
-            panic!("`Args` can only be derived for structs");
-        }
+fn extract_option_inner(ty: &Type) -> Option<&Type> {
+    let Type::Path(TypePath { path, .. }) = ty else {
+        return None;
     };
 
-    let init_fields: Box<[proc_macro2::TokenStream]> = fields
-        .iter()
-        .map(|field| {
-            let field_ident = field
-                .ident
-                .as_ref()
-                .expect("Named fields should always have an identifier");
-            let field_type = &field.ty;
-            if let Type::Path(TypePath { path, .. }) = field_type
-                && let Some(segment) = path.segments.last()
-                && segment.ident == "Option"
-            {
-                if let PathArguments::AngleBracketed(args) = &segment.arguments
-                    && let Some(syn::GenericArgument::Type(inner_type)) = args.args.first()
-                {
-                    return quote! { #field_ident: None::<#inner_type> };
-                }
-                let error = syn::Error::new_spanned(
-                    field_type,
-                    "Option type must have exactly one type argument (e.g., Option<T>)",
-                )
-                .to_compile_error();
-                return quote! { #field_ident: #error };
-            }
-            quote! { #field_ident: false }
-        })
-        .collect();
+    let seg = path.segments.last()?;
 
-    let match_arms: Box<[proc_macro2::TokenStream]> = fields
-        .iter()
-        .map(|field| {
-            let field_ident = field.ident.as_ref().unwrap();
-            let field_name = field_ident.to_string();
-            let mut flag = None;
-            for attr in &field.attrs {
-                if attr.path().is_ident("arg")
-                    && let syn::Meta::List(meta_list) = &attr.meta
-                {
-                    let arg: ArgAttr = syn::parse2(meta_list.tokens.clone())
-                        .expect("failed to parse field attributes");
-                    flag = arg.flag;
-                }
-            }
-            let flag = flag.unwrap_or(field_name.chars().next().unwrap());
-            let field_type = &field.ty;
-            let mut last_segment = None;
-            if let Type::Path(TypePath { path, .. }) = field_type {
-                last_segment = path.segments.last();
+    if seg.ident != "Option" {
+        return None;
+    }
+
+    let PathArguments::AngleBracketed(args) = &seg.arguments else {
+        return None;
+    };
+
+    if args.args.len() != 1 {
+        return None;
+    }
+
+    match &args.args[0] {
+        syn::GenericArgument::Type(ty) => Some(ty),
+        _ => None,
+    }
+}
+
+fn parse_field(field: &syn::Field) -> syn::Result<FieldInfo<'_>> {
+    let ident = field
+        .ident
+        .as_ref()
+        .ok_or_else(|| Error::new_spanned(field, "expected named field"))?;
+
+    let mut attr: Option<ArgAttr> = None;
+
+    for item in &field.attrs {
+        if item.path().is_ident("arg") {
+            let Meta::List(list) = &item.meta else {
+                return Err(Error::new_spanned(item, "expected #[arg(...)]"));
             };
-            let is_option = last_segment.is_some_and(|seg| seg.ident == "Option");
 
-            if is_option {
-                let inner_type =
-                    if let PathArguments::AngleBracketed(args) = &last_segment.unwrap().arguments {
-                        if args.args.len() != 1 {
-                            panic!("Option type must have exactly one type argument");
+            attr = Some(syn::parse2(list.tokens.clone())?);
+        }
+    }
+
+    let attr = attr.ok_or_else(|| Error::new_spanned(field, "missing #[arg(...)] attribute"))?;
+
+    let flag = attr
+        .flag
+        .ok_or_else(|| Error::new_spanned(field, "missing `flag = 'x'`"))?;
+    if !flag.is_ascii() {
+        return Err(Error::new_spanned(field, "flag must be ASCII"));
+    }
+
+    let inner_ty = extract_option_inner(&field.ty);
+
+    Ok(FieldInfo {
+        ident,
+        flag,
+        help: attr.help.unwrap_or_else(|| "UNDOCUMENTED OPTION".into()),
+        is_option: inner_ty.is_some(),
+        value_name: ident.to_string(),
+        inner_ty,
+    })
+}
+
+enum ValueKind {
+    Parse,
+    String,
+    BoxStr,
+}
+
+fn classify_value_type(ty: &Type) -> ValueKind {
+    match ty {
+        Type::Path(tp) => {
+            let Some(seg) = tp.path.segments.last() else {
+                return ValueKind::Parse;
+            };
+
+            if seg.ident == "String" {
+                return ValueKind::String;
+            }
+
+            if seg.ident == "Box" {
+                if let PathArguments::AngleBracketed(args) = &seg.arguments {
+                    if let Some(syn::GenericArgument::Type(Type::Path(inner))) = args.args.first() {
+                        if inner.path.is_ident("str") {
+                            return ValueKind::BoxStr;
                         }
-                        let mut inner_type = None;
-                        if let syn::GenericArgument::Type(ty) = &args.args[0] {
-                            inner_type = Some(ty);
-                        }
-                        inner_type.expect("Option type must have exactly one type argument")
-                    } else {
-                        panic!("Option type must be generic");
-                    };
-                let inner_type_str = quote!(#inner_type).to_string();
-                let parse = if inner_type_str.contains(" str ") {
-                    quote! {
-                        .into_boxed_str().into()
                     }
-                } else {
+                }
+            }
+
+            ValueKind::Parse
+        }
+
+        _ => ValueKind::Parse,
+    }
+}
+
+fn format_usage(prefix: &str, parts: &[String], width: usize) -> String {
+    let indent = " ".repeat(prefix.len());
+
+    let mut out = String::from(prefix);
+    let mut line_len = prefix.len();
+
+    for (i, part) in parts.iter().enumerate() {
+        let sep = if i == 0 { "" } else { " " };
+
+        if line_len + sep.len() + part.len() > width {
+            out.push('\n');
+            out.push_str(&indent);
+            out.push_str(part);
+
+            line_len = indent.len() + part.len();
+        } else {
+            out.push_str(sep);
+            out.push_str(part);
+
+            line_len += sep.len() + part.len();
+        }
+    }
+
+    out
+}
+
+#[proc_macro_derive(Args, attributes(args, arg))]
+pub fn derive(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+
+    match derive_impl(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+fn derive_impl(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+    let args = ArgsAttr::from_derive_input(&input)?;
+
+    if args.name.is_empty() {
+        return Err(Error::new_spanned(
+            input.ident,
+            "missing #[args(name = \"...\")]",
+        ));
+    }
+
+    let Data::Struct(data) = &input.data else {
+        return Err(Error::new_spanned(
+            input.ident,
+            "Args can only be derived for structs",
+        ));
+    };
+
+    let Fields::Named(fields) = &data.fields else {
+        return Err(Error::new_spanned(
+            data.fields.clone(),
+            "expected named fields",
+        ));
+    };
+
+    let parsed_fields = fields
+        .named
+        .iter()
+        .map(parse_field)
+        .collect::<syn::Result<Vec<_>>>()?;
+
+    let struct_name = &input.ident;
+    let cli_name = args.name;
+    let allow_no_args = args.allow_no_args.unwrap_or(false);
+
+    // =========================
+    // init fields
+    // =========================
+
+    let init_fields = parsed_fields.iter().map(|field| {
+        let ident = field.ident;
+
+        if let Some(inner) = field.inner_ty {
+            quote! {
+                #ident: None::<#inner>
+            }
+        } else {
+            quote! {
+                #ident: false
+            }
+        }
+    });
+
+    // =========================
+    // parse arms
+    // =========================
+
+    let parse_arms = parsed_fields.iter().map(|field| {
+        let ident = field.ident;
+        let flag = field.flag;
+
+        if let Some(inner_ty) = field.inner_ty {
+            let parse_expr = match classify_value_type(inner_ty) {
+                ValueKind::String => {
+                    quote! { value }
+                }
+
+                ValueKind::BoxStr => {
+                    quote! { value.into_boxed_str() }
+                }
+
+                ValueKind::Parse => {
                     quote! {
-                        .parse().map_err(|_| {
+                        value.parse::<#inner_ty>().map_err(|_| {
                             Self::usage();
                             std::process::ExitCode::FAILURE
                         })?
                     }
-                };
-                let parse = quote! {
-                    let value: #inner_type = if flags.iter().nth(pos + 1).is_none() {
+                }
+            };
+
+            quote! {
+                #flag => {
+                    let value = if pos + 1 < bytes.len() {
+                        arg[pos + 1..].to_owned()
+                    } else {
                         args.next().ok_or_else(|| {
                             Self::usage();
                             std::process::ExitCode::FAILURE
-                        })?#parse
-                    } else {
-                        let opos = pos + 1;
-                        pos += flags.len() - 1;
-                        flags[opos..].iter().collect::<String>()#parse
+                        })?
                     };
-                };
-                quote! {
-                    #flag => {
-                        #parse
-                        instance.#field_ident = Some(value);
-                    }
-                }
-            } else {
-                quote! {
-                    #flag => {
-                        instance.#field_ident = true;
-                    }
+
+                    instance.#ident = Some(#parse_expr);
+
+                    break;
                 }
             }
-        })
-        .collect();
+        } else {
+            quote! {
+                #flag => {
+                    instance.#ident = true;
 
-    let mut help_entries: Box<[(char, proc_macro2::TokenStream)]> = fields
+                    pos += 1;
+                }
+            }
+        }
+    });
+
+    // =========================
+    // help text
+    // =========================
+
+    let mut help_lines = parsed_fields
         .iter()
         .map(|field| {
-            let mut flag = None;
-            let mut help_override = None;
-            for attr in &field.attrs {
-                if attr.path().is_ident("arg")
-                    && let syn::Meta::List(meta_list) = &attr.meta
-                {
-                    let arg: ArgAttr = syn::parse2(meta_list.tokens.clone())
-                        .expect("failed to parse field attributes");
-                    flag = arg.flag;
-                    help_override = arg.help.map(|s| s.into_boxed_str());
-                }
-            }
-            let is_option = matches!(&field.ty, Type::Path(type_path) if 
-                type_path.path.segments.last().is_some_and( |seg| seg.ident == "Option"));
-            let text = help_override.unwrap_or_else(|| {
-                if is_option {
-                    Box::from("VALUE PLACEHOLDER")
-                } else {
-                    Box::from("BOOLEAN PLACEHOLDER")
-                }
-            });
-            let flag = flag.unwrap_or(
-                field
-                    .ident
-                    .as_ref()
-                    .unwrap()
-                    .to_string()
-                    .chars()
-                    .next()
-                    .unwrap(),
-            );
+            let flag = field.flag;
+            let help = &field.help;
+            let left = format!("-{}", flag);
+
             (
                 flag,
-                quote! {
-                    eprintln!("        -{}              {}", #flag, #text);
-                },
+                format!("        {:<width$}{}", left, help, width = 16,),
             )
         })
-        .chain([(
-            'h',
-            quote! {
-                eprintln!("        -h              prints this help message");
-            },
-        )])
-        .collect();
-    help_entries.sort_by(|(flag_a, _), (flag_b, _)| custom_char_sort(flag_a, flag_b));
-    let field_helps: Box<[proc_macro2::TokenStream]> =
-        help_entries.into_iter().map(|(_, ts)| ts).collect();
+        .collect::<Vec<_>>();
 
-    let mut bool_flags: Box<[char]> = fields
-        .iter()
-        .filter(|field| {
-            !matches!(&field.ty, Type::Path(type_path) if 
-                type_path.path.segments.last().is_some_and(|seg| seg.ident == "Option"))
-        })
-        .map(|field| {
-            let field_name = field.ident.as_ref().unwrap().to_string();
-            let mut flag = None;
-            for attr in &field.attrs {
-                if attr.path().is_ident("arg")
-                    && let syn::Meta::List(meta_list) = &attr.meta
-                {
-                    let arg: ArgAttr = syn::parse2(meta_list.tokens.clone())
-                        .expect("failed to parse field attributes");
-                    flag = arg.flag;
-                }
-            }
-            flag.unwrap_or(field_name.chars().next().unwrap())
-        })
-        .chain(['h'])
-        .collect();
-    bool_flags.sort_by(custom_char_sort);
-    let available_bool = if bool_flags.is_empty() {
-        "".to_string()
-    } else {
-        format!("[-{}]", bool_flags.into_iter().collect::<Box<str>>())
-    };
+    let left = "-h";
 
-    let mut value_options: Box<[(char, Box<str>)]> = fields
-        .iter()
-        .filter(|field| {
-            matches!(&field.ty, Type::Path(type_path) if 
-                type_path.path.segments.last().is_some_and( |seg| seg.ident == "Option"))
-        })
-        .map(|field| {
-            let field_name = field.ident.as_ref().unwrap().to_string().into_boxed_str();
-            let mut flag = None;
-            for attr in &field.attrs {
-                if attr.path().is_ident("arg")
-                    && let syn::Meta::List(meta_list) = &attr.meta
-                {
-                    let arg: ArgAttr = syn::parse2(meta_list.tokens.clone())
-                        .expect("failed to parse field attributes");
-                    flag = arg.flag;
-                }
-            }
-            let flag = flag.unwrap_or(field_name.chars().next().unwrap());
-            (flag, field_name)
-        })
-        .collect();
-    value_options.sort_by(|(flag_a, _), (flag_b, _)| custom_char_sort(flag_a, flag_b));
-    let usage = format_usage_tokens(
-        &format!("usage: {} ", name),
-        iter::once(available_bool).chain(
-            value_options
-                .into_iter()
-                .map(|(flag, field_name)| format!("[-{} {}]", flag, field_name)),
+    help_lines.push((
+        'h',
+        format!(
+            "        {:<width$}{}",
+            left,
+            "print this help message",
+            width = 16,
         ),
-        65,
-    )
-    .into_boxed_str();
+    ));
 
-    let help_definition = quote! {
-        fn help() {
-            Self::usage();
-            eprintln!("Command Summary:");
-            #(#field_helps)*
+    help_lines.sort_by_key(|(flag, _)| flag.to_ascii_lowercase());
+
+    let help_text = help_lines
+        .into_iter()
+        .map(|(_, line)| line)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // =========================
+    // usage
+    // =========================
+
+    let mut usage_parts = vec!["[-h]".to_string()];
+
+    for field in &parsed_fields {
+        let flag = field.flag;
+
+        if field.is_option {
+            let value = &field.value_name;
+
+            usage_parts.push(format!("[-{} {}]", flag, value,));
+        } else {
+            usage_parts.push(format!("[-{flag}]"));
         }
-    };
+    }
 
-    let usage_definition = quote! {
-        fn usage() {
-            eprintln!("{}", #usage);
-        }
-    };
+    let usage = format_usage(&format!("usage: {} ", cli_name), &usage_parts, 65);
 
-    let expanded = quote! {
-        pub trait Usage {
-            fn usage();
-        }
+    Ok(quote! {
+        impl #struct_name {
+            pub fn usage() {
+                eprintln!(#usage);
+            }
 
-        impl Usage for #struct_name {
-            #usage_definition
-        }
+            pub fn help() {
+                Self::usage();
+                eprintln!();
+                eprintln!("Command Summary:");
+                eprintln!(#help_text);
+            }
 
-        pub trait Help {
-            fn help()
-            where
-                Self: Usage;
-        }
+            pub fn parse()
+                -> Result<Self, std::process::ExitCode>
+            {
+                let mut args =
+                    std::env::args().skip(1).peekable();
 
-        impl Help for #struct_name {
-            #help_definition
-        }
-
-        pub trait Parse {
-            fn parse() -> Result<Self, std::process::ExitCode> where Self: Sized;
-        }
-
-        impl Parse for #struct_name {
-            fn parse() -> Result<Self, std::process::ExitCode> {
-                let mut instance = #struct_name { #(#init_fields),* };
-                let mut args = std::env::args().skip(1);
-                if !#allow_no_args && args.len() == 0 {
+                if !#allow_no_args && args.peek().is_none() {
                     Self::usage();
                     return Err(std::process::ExitCode::FAILURE);
                 }
+
+                let mut instance = Self {
+                    #(#init_fields),*
+                };
+
                 while let Some(arg) = args.next() {
-                    if !arg.starts_with('-') {
+                    if !arg.starts_with('-') || arg.len() < 2  {
                         Self::usage();
                         return Err(std::process::ExitCode::FAILURE);
                     }
 
-                    let flags = arg.chars().skip(1).collect::<Box<[char]>>();
-                    if flags.is_empty() {
-                        Self::usage();
-                        return Err(std::process::ExitCode::FAILURE);
-                    }
-                    if flags.iter().any(|&ch| ch == 'h') {
-                        Self::help();
-                        return Err(std::process::ExitCode::SUCCESS);
-                    }
-                    let mut pos = 0;
+                    let bytes = arg.as_bytes();
+                    let mut pos = 1;
 
-                    while pos < flags.len() {
-                        match flags[pos] {
-                            #(#match_arms)*
+                    while pos < bytes.len() {
+                        let ch = bytes[pos];
+
+                        if !ch.is_ascii() {
+                            Self::usage();
+                            return Err(std::process::ExitCode::FAILURE);
+                        }
+
+                        match ch as char {
+                            'h' => {
+                                Self::help();
+                                return Err(
+                                    std::process::ExitCode::SUCCESS
+                                );
+                            }
+
+                            #(#parse_arms)*
+
                             _ => {
                                 Self::usage();
-                                return Err(std::process::ExitCode::FAILURE);
-                            },
+                                return Err(
+                                    std::process::ExitCode::FAILURE
+                                );
+                            }
                         }
-                        pos += 1;
                     }
                 }
 
                 Ok(instance)
             }
         }
-    };
-
-    TokenStream::from(expanded)
-}
-
-fn format_usage_tokens(
-    prefix: &str,
-    tokens: impl IntoIterator<Item = String>,
-    max_width: usize,
-) -> String {
-    let prefix_len = prefix.chars().count();
-
-    let mut out = String::new();
-    out.push_str(prefix);
-
-    let mut line_len = prefix_len;
-    let mut first_token = true;
-
-    for token in tokens {
-        let token_len = token.chars().count();
-        let sep_len = if first_token { 0 } else { 1 };
-
-        if line_len + sep_len + token_len > max_width {
-            out.push('\n');
-            out.push_str(&" ".repeat(prefix_len));
-            out.push_str(&token);
-            line_len = prefix_len + token_len;
-        } else {
-            if !first_token {
-                out.push(' ');
-                line_len += 1;
-            }
-            out.push_str(&token);
-            line_len += token_len;
-        }
-
-        first_token = false;
-    }
-
-    out
+    })
 }
