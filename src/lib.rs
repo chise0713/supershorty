@@ -29,7 +29,7 @@
 //! }
 //! # ExitCode::SUCCESS
 //! # }
-//! ``
+//! ```
 extern crate proc_macro;
 
 use darling::FromDeriveInput;
@@ -59,7 +59,7 @@ impl Parse for ArgAttr {
     fn parse(input: ParseStream) -> syn::Result<Self> {
         let mut out = Self::default();
 
-        let metas = Punctuated::<Meta, Token![,]>::parse_terminated(input)?;
+        let metas: Punctuated<Meta, Token![,]> = Punctuated::parse_terminated(input)?;
 
         for meta in metas {
             match meta {
@@ -264,11 +264,10 @@ fn derive_impl(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
         ));
     };
 
-    let parsed_fields = fields
-        .named
-        .iter()
-        .map(parse_field)
-        .collect::<syn::Result<Vec<_>>>()?;
+    let parsed_fields = {
+        let r: syn::Result<Vec<_>> = fields.named.iter().map(parse_field).collect();
+        r?
+    };
 
     let struct_name = &input.ident;
     let cli_name = args.name;
@@ -351,7 +350,7 @@ fn derive_impl(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
     // help text
     // =========================
 
-    let mut help_lines = parsed_fields
+    let mut help_lines: Vec<_> = parsed_fields
         .iter()
         .map(|field| {
             let flag = field.flag;
@@ -363,7 +362,7 @@ fn derive_impl(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
                 format!("        {:<width$}{}", left, help, width = 16,),
             )
         })
-        .collect::<Vec<_>>();
+        .collect();
 
     let left = "-h";
 
@@ -379,29 +378,44 @@ fn derive_impl(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 
     help_lines.sort_by_key(|(flag, _)| flag.to_ascii_lowercase());
 
-    let help_text = help_lines
-        .into_iter()
-        .map(|(_, line)| line)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let mut help_text = String::new();
+
+    for (idx, (_, line)) in help_lines.into_iter().enumerate() {
+        if idx != 0 {
+            help_text.push('\n');
+        }
+
+        help_text.push_str(&line);
+    }
 
     // =========================
     // usage
     // =========================
 
-    let mut usage_parts = vec!["[-h]".to_string()];
+    let mut bool_flags = vec!['h'];
+    let mut option_parts = Vec::new();
 
     for field in &parsed_fields {
-        let flag = field.flag;
-
         if field.is_option {
-            let value = &field.value_name;
-
-            usage_parts.push(format!("[-{} {}]", flag, value,));
+            option_parts.push(format!("[-{} {}]", field.flag, field.value_name,));
         } else {
-            usage_parts.push(format!("[-{flag}]"));
+            bool_flags.push(field.flag);
         }
     }
+
+    bool_flags.sort_unstable_by_key(|c| (c.to_ascii_lowercase(), *c));
+
+    option_parts.sort_unstable();
+
+    let mut usage_parts = Vec::new();
+
+    if !bool_flags.is_empty() {
+        let flags: String = bool_flags.into_iter().collect();
+
+        usage_parts.push(format!("[-{}]", flags));
+    }
+
+    usage_parts.extend(option_parts);
 
     let usage = format_usage(&format!("usage: {} ", cli_name), &usage_parts, 65);
 
@@ -413,7 +427,6 @@ fn derive_impl(input: DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
 
             pub fn help() {
                 Self::usage();
-                eprintln!();
                 eprintln!("Command Summary:");
                 eprintln!(#help_text);
             }
