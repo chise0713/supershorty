@@ -1,9 +1,9 @@
 [package]
 name = "supershorty"
-version = "0.3.1"
+version = "0.3.2"
 authors = ["チセ <123655015+chise0713@users.noreply.github.com>"]
 edition = "2021"
-rust-version = "1.65"
+rust-version = "1.71.1"
 license = "MIT OR Apache-2.0"
 description = "A BSD-styled CLI parser"
 repository = "https://github.com/chise0713/supershorty"
@@ -14,7 +14,7 @@ categories = ["command-line-interface"]
 proc-macro = true
 
 [dependencies]
-darling = "^0.20"
+darling = "^0.21"                             # ^0.23 needs msrv 1.88
 proc-macro2 = "^1"
 quote = "^1"
 syn = { version = "^2", features = ["full"] }
